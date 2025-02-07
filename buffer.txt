@@ -1,0 +1,464 @@
+#include <SDL2/SDL.h>
+#include <stdio.h>
+#include <math.h>
+
+#define PI 3.14159265359
+
+static int SCREEN_WIDTH = 1920 * 0.65, SCREEN_HEIGHT = 1080 * 0.65;
+static int TILE_SIZE = 32;
+static double _FoV = 60 * (PI/180);
+
+// BOOLEAN ENUMATOR
+typedef enum {
+    FALSE,
+    TRUE
+} boolean;
+
+// STRUCTURES
+typedef struct {
+    SDL_Window *window;
+    SDL_Renderer *renderer;
+    SDL_Texture *texture;
+    Uint32 *pixels;
+    boolean programSuccess;
+} API;
+
+typedef struct {
+    double x;
+    double y;
+} position2D;
+
+typedef struct {
+    position2D position2D;
+    float angle;
+} player;
+
+typedef struct {
+    position2D rayLenght;
+    position2D hitSpot;
+    boolean isVertical;
+} rayInfo;
+
+typedef struct {
+    double wallHeight;
+    int wallTopPoint;
+    int wallBottomPoint;
+} wallInfo;
+
+// TEMPORARY MAP ARRAY
+static uint8_t map[16][16] = {
+    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
+    {1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
+    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+};
+
+// FUNCTION INITIALIZERS
+void initializeAPI(API *);
+void disposeAPI(API *);
+void gameLoop(API *);
+Uint32 getColorCode(int, int, int);
+void pixelManipulator(API *, player);
+rayInfo singleRayCaster(API *, double, position2D);
+
+// ENTRY POINT FUNCTION
+int main(int argc, char *args[]) {
+    API _API;
+    _API.programSuccess = TRUE;
+
+    initializeAPI(&_API);
+    if (_API.programSuccess == TRUE) {
+        gameLoop(&_API);
+    } else {
+        printf("Program Success has failed, SDL Error: %s\n", SDL_GetError());
+    }
+    disposeAPI(&_API);
+    return 0;
+}
+
+// OTHER FUNCTIONS
+void initializeAPI(API *_API) {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0)
+    {
+        printf("SDL Initialization has failed, SDL Error: %s\n", SDL_GetError());
+        _API->programSuccess = FALSE;
+        return;
+    }
+
+    _API->window = SDL_CreateWindow(
+        "SDL Example",
+        SDL_WINDOWPOS_CENTERED,
+        SDL_WINDOWPOS_CENTERED,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT,
+        SDL_WINDOW_SHOWN);
+    if (_API->window == NULL)
+    {
+        printf("SDL Window Initialization has failed, SDL Error: %s\n", SDL_GetError());
+        _API->programSuccess = FALSE;
+        return;
+    }
+
+    _API->renderer = SDL_CreateRenderer(
+        _API->window,
+        -1,
+        SDL_RENDERER_ACCELERATED);
+    if (_API->renderer == NULL)
+    {
+        printf("SDL Renderer Initialization has failed, SDL Error: %s\n", SDL_GetError());
+        _API->programSuccess = FALSE;
+        return;
+    }
+
+    _API->texture = SDL_CreateTexture(
+        _API->renderer,
+        SDL_PIXELFORMAT_ARGB8888,
+        SDL_TEXTUREACCESS_STREAMING,
+        SCREEN_WIDTH,
+        SCREEN_HEIGHT);
+    if (_API->texture == NULL)
+    {
+        printf("SDL Texture Initialization has failed, SDL Error: %s\n", SDL_GetError());
+        _API->programSuccess = FALSE;
+        return;
+    }
+
+    // Allocate pixels once
+    _API->pixels = (Uint32 *)malloc(SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
+    if (_API->pixels == NULL)
+    {
+        printf("Memory allocation for pixels failed.\n");
+        _API->programSuccess = FALSE;
+        return;
+    }
+    memset(_API->pixels, 0, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
+}
+
+void disposeAPI(API *_API) {
+    if (_API->pixels)
+        free(_API->pixels);
+    if (_API->texture)
+        SDL_DestroyTexture(_API->texture);
+    if (_API->renderer)
+        SDL_DestroyRenderer(_API->renderer);
+    if (_API->window)
+        SDL_DestroyWindow(_API->window);
+    SDL_Quit();
+}
+
+void gameLoop(API *_API) {
+    SDL_Event event;
+    boolean quitRequest = FALSE;
+
+    player _player;
+    _player.position2D = {5.0 * TILE_SIZE, 5.0 * TILE_SIZE};
+    _player.angle = 1 * (PI / 180);
+
+    double movementInterval = 3.0;
+    double angleInterval = 2.0;
+
+    while (quitRequest == FALSE) {
+        pixelManipulator(_API, _player);
+        while (SDL_PollEvent(&event) != 0) {
+            int playerTileX = 0;
+            int playerTileY = 0;
+            if (event.type == SDL_QUIT) {
+                quitRequest = TRUE;
+            }
+            else if (event.type == SDL_KEYDOWN) {
+                switch (event.key.keysym.sym) {
+                case SDLK_ESCAPE:
+                    quitRequest = TRUE;
+                    break;
+                case SDLK_w:
+                    _player.position2D.x += cos(_player.angle) * movementInterval;
+                    _player.position2D.y -= sin(_player.angle) * movementInterval;
+                    playerTileX = (int)((_player.position2D.x - fmod(_player.position2D.x, TILE_SIZE)) / TILE_SIZE);
+                    playerTileY = (int)((_player.position2D.y - fmod(_player.position2D.y, TILE_SIZE)) / TILE_SIZE);
+                    if(map[playerTileY][playerTileX] != 0) {
+                        _player.position2D.x -= cos(_player.angle) * movementInterval;
+                        _player.position2D.y += sin(_player.angle) * movementInterval;
+                    }
+                    break;
+                case SDLK_s:
+                    _player.position2D.x -= cos(_player.angle) * movementInterval;
+                    _player.position2D.y += sin(_player.angle) * movementInterval;
+                    playerTileX = (int)((_player.position2D.x - fmod(_player.position2D.x, TILE_SIZE)) / TILE_SIZE);
+                    playerTileY = (int)((_player.position2D.y - fmod(_player.position2D.y, TILE_SIZE)) / TILE_SIZE);
+                    if(map[playerTileY][playerTileX] != 0) {
+                        _player.position2D.x += cos(_player.angle) * movementInterval;
+                        _player.position2D.y -= sin(_player.angle) * movementInterval;
+                    }
+                    break;
+                case SDLK_a:
+                    _player.angle -= angleInterval * (PI / 180);
+                    _player.angle = fmod(_player.angle + 2 * M_PI, 2 * M_PI);
+                    break;
+                case SDLK_d:
+                    _player.angle += angleInterval * (PI / 180);
+                    _player.angle = fmod(_player.angle + 2 * M_PI, 2 * M_PI);
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
+    }
+}
+
+Uint32 getColorCode(int red, int green, int blue) {
+    Uint32 alpha = 0xFF;
+    return (alpha << 24) | (red << 16) | (green << 8) | blue;
+}
+
+void drawLine(position2D start, position2D end, API *_API) {
+    int x0 = (int)start.x;
+    int y0 = (int)start.y;
+    int x1 = (int)end.x;
+    int y1 = (int)end.y;
+    int dx = abs(x1 - x0);
+    int dy = abs(y1 - y0);
+    int sx = (x0 < x1) ? 1 : -1;
+    int sy = (y0 < y1) ? 1 : -1;
+    int err = dx - dy;
+    while (1) {
+        if (x0 >= 0 && x0 < SCREEN_WIDTH && y0 >= 0 && y0 < SCREEN_HEIGHT) {
+            _API->pixels[y0 * SCREEN_WIDTH + x0] = getColorCode(255, 255, 0);
+        }
+        if (x0 == x1 && y0 == y1)
+            break;
+        int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            x0 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+double getDirectionalDifference(double currentAxisPosition, boolean isForward) {
+    boolean onAxis = fmod(currentAxisPosition, TILE_SIZE) == 0 ? TRUE : FALSE;
+    double residual = onAxis == TRUE ? residual = 0 : residual = fmod(currentAxisPosition, TILE_SIZE);
+    double difference = 0;
+
+    if (isForward == TRUE) {
+        double mapIndex = (currentAxisPosition - residual) / TILE_SIZE;
+        double destination = (mapIndex + 1) * TILE_SIZE;
+        difference = destination - currentAxisPosition;
+    }
+    else {
+        double mapIndex = (currentAxisPosition - residual) / TILE_SIZE;
+        double destination = residual != 0
+                                 ? mapIndex * TILE_SIZE
+                                 : (mapIndex - 1) * TILE_SIZE;
+        difference = currentAxisPosition - destination;
+    }
+    return difference;
+}
+
+rayInfo singleRayCaster(API *_API, double angle, position2D position) {
+    rayInfo sentRay;
+    sentRay.isVertical = FALSE;
+    position2D startingPosition = position;
+    position2D iterativePosition = startingPosition;
+    double phi = angle;
+
+    while (TRUE) {
+        boolean isForwardX, isForwardY;
+        if (cos(phi) >= 0) { isForwardX = TRUE; } else { isForwardX = FALSE; }
+        if (sin(phi) <= 0) { isForwardY = TRUE; } else { isForwardY = FALSE; }
+
+        position2D differentialPosition = {
+            getDirectionalDifference(iterativePosition.x, isForwardX),
+            getDirectionalDifference(iterativePosition.y, isForwardY)
+        };
+        position2D hypotenuse = {
+            (isForwardX == TRUE) ? fabs(differentialPosition.x / cos(phi)) : fabs(differentialPosition.x / cos(phi)),
+            (isForwardY == TRUE) ? fabs(differentialPosition.y / sin(phi)) : fabs(differentialPosition.y / sin(phi))
+        };
+
+        position2D newPosition;
+        if (fmod(phi, (PI * 0.5)) != PI * 0.25) {
+            if (hypotenuse.x < hypotenuse.y) {
+                newPosition = {
+                    isForwardX == TRUE
+                        ? iterativePosition.x + differentialPosition.x
+                        : iterativePosition.x - differentialPosition.x,
+                    iterativePosition.y - (hypotenuse.x * sin(phi))};
+            }
+            else {
+                newPosition = {
+                    iterativePosition.x + (hypotenuse.y * cos(phi)),
+                    isForwardY == TRUE
+                        ? iterativePosition.y + differentialPosition.y
+                        : iterativePosition.y - differentialPosition.y};
+            }
+        } else {
+            newPosition = {
+                isForwardX == TRUE
+                    ? iterativePosition.x + differentialPosition.x
+                    : iterativePosition.x - differentialPosition.x,
+                isForwardY == TRUE
+                    ? iterativePosition.y + differentialPosition.y
+                    : iterativePosition.y - differentialPosition.y,
+            };
+        }
+        position2D midPoint = {
+            (newPosition.x + iterativePosition.x) / 2,
+            (newPosition.y + iterativePosition.y) / 2
+        };
+        int midStepX = (int)((midPoint.x - fmod(midPoint.x, TILE_SIZE)) / TILE_SIZE);
+        int midStepY = (int)((midPoint.y - fmod(midPoint.y, TILE_SIZE)) / TILE_SIZE);
+        if (map[midStepY][midStepX] != 0) {
+            break;
+        }
+        iterativePosition = newPosition;
+    }
+    position2D rayTravelDistance = {
+        fabs(iterativePosition.x - startingPosition.x),
+        fabs(iterativePosition.y - startingPosition.y),
+    };
+
+    if (fmod(iterativePosition.y, TILE_SIZE) > 0 && fmod(iterativePosition.x, TILE_SIZE) <= 0) {
+        sentRay.isVertical = TRUE;
+    }
+    sentRay.rayLenght = rayTravelDistance;
+    sentRay.hitSpot = iterativePosition;
+    return sentRay;
+}
+
+Uint32* readFromSprite() {
+    Uint32* colorCode = (Uint32*)malloc(TILE_SIZE * TILE_SIZE * sizeof(Uint32));
+    if (colorCode == NULL) {
+        fprintf(stderr, "Memory allocation failed!\n");
+        return NULL;
+    }
+
+    SDL_Surface* image = SDL_LoadBMP("D:\\aseprite\\tile.bmp");
+    if (image == NULL) {
+        printf("The tile image failed to load, SDL ERROR: %s\n", SDL_GetError());
+        free(colorCode);
+        return NULL;
+    }
+
+    Uint32* pixels = (Uint32*)image->pixels;
+    for (int y = 0; y < TILE_SIZE; y++) {
+        for (int x = 0; x < TILE_SIZE; x++) {
+            Uint32 pixel = pixels[y * TILE_SIZE + x];
+            Uint8 red, green, blue, alpha;
+            SDL_GetRGBA(pixel, image->format, &red, &green, &blue, &alpha);
+            colorCode[y * TILE_SIZE + x] = getColorCode(red, green, blue);
+        }
+    }
+    SDL_FreeSurface(image);
+    return colorCode;
+}
+
+void renderTiles(API* _API, Uint32* tileArray, rayInfo _rayInfo, wallInfo _wallInfo, int horizontalIndex) {
+    double scalingFactor = _wallInfo.wallHeight / TILE_SIZE;
+    double fractional;
+    if(_rayInfo.isVertical) {
+        fractional = fmod(_rayInfo.hitSpot.y, TILE_SIZE);
+    } else {
+        fractional = fmod(_rayInfo.hitSpot.x, TILE_SIZE);
+    }
+    for(int i = _wallInfo.wallTopPoint; i < _wallInfo.wallBottomPoint; i++) {
+        int currentPixelIndex = (i - _wallInfo.wallTopPoint) / scalingFactor;
+        if (currentPixelIndex >= TILE_SIZE) {
+            currentPixelIndex = TILE_SIZE - 1;
+        }
+        Uint32 pixel = tileArray[currentPixelIndex * TILE_SIZE + (int)fractional];
+        if (_rayInfo.isVertical) {
+            double shadowFactor = 0.4;
+            Uint8 r = (pixel >> 24) & 0xFF;
+            Uint8 g = (pixel >> 16) & 0xFF;
+            Uint8 b = (pixel >> 8) & 0xFF;
+            r = static_cast<Uint8>(r * shadowFactor);
+            g = static_cast<Uint8>(g * shadowFactor);
+            b = static_cast<Uint8>(b * shadowFactor);
+            pixel = (r << 24) | (g << 16) | (b << 8) | (pixel & 0xFF);
+        }
+        _API->pixels[i * SCREEN_WIDTH + horizontalIndex] = pixel;
+    }
+}
+
+void renderGround(API* _API, player _player, Uint32* tileArray) {
+    double distanceToProjectionPlane = (SCREEN_WIDTH / 2) / tan(_FoV / 2);
+    double playerHeight = 0.5 * TILE_SIZE;
+    double angleStep = _FoV / SCREEN_WIDTH;
+    for(int i = 0; i < SCREEN_WIDTH; i++) {
+        double angle = _player.angle - (_FoV/2) + angleStep * i;
+        rayInfo _rayInfo = singleRayCaster(_API, angle, _player.position2D);
+        double rayDistance = sqrt( pow(_rayInfo.rayLenght.x, 2) + pow(_rayInfo.rayLenght.y, 2) );
+
+        double theta = fmod((_player.angle - angle + PI), (2 * PI)) - PI; 
+        double correctedDistance = rayDistance * cos(theta);
+
+        double r = playerHeight * distanceToProjectionPlane / correctedDistance;
+        double projectedRow = r + (SCREEN_HEIGHT / 2);
+        for(int y = projectedRow; y < SCREEN_HEIGHT; y++) {
+            r = y - (SCREEN_HEIGHT/2);
+            double currentFloorPoint = playerHeight * distanceToProjectionPlane / r;
+            position2D floor = {
+                _player.position2D.x + cos(angle) * currentFloorPoint,
+                _player.position2D.y - sin(angle) * currentFloorPoint
+            };
+            int textureX = (int)( fmod(fabs(floor.x), TILE_SIZE) );
+            int textureY = (int)( fmod(fabs(floor.y), TILE_SIZE) );
+            Uint32 color = tileArray[textureY * TILE_SIZE + textureX];
+            _API->pixels[y * SCREEN_WIDTH + i] = color;
+        }
+    }
+}
+
+void rayCaster(API* _API, player _player, Uint32* tileArray) {
+    double distanceToProjectionPlane = (SCREEN_WIDTH/2)/tan(_FoV/2);
+    double angleStep = _FoV / SCREEN_WIDTH;
+    for(int x = 0; x < SCREEN_WIDTH; x++) {
+        double angle = _player.angle - (_FoV/2) + angleStep * x;
+        rayInfo _rayInfo = singleRayCaster(_API, angle, _player.position2D);
+        double rayDistance = sqrt( pow(_rayInfo.rayLenght.x, 2) + pow(_rayInfo.rayLenght.y, 2) );
+        
+        double theta = fmod((_player.angle - angle + PI), (2 * PI)) - PI; 
+        double correctedDistance = rayDistance * cos(theta);
+
+        double projectedWallHeight = distanceToProjectionPlane * TILE_SIZE / correctedDistance;
+        if(projectedWallHeight >= SCREEN_HEIGHT) { projectedWallHeight = SCREEN_HEIGHT - 1; }
+        int wallTopPoint = (SCREEN_HEIGHT/2) - (projectedWallHeight/2);
+        int wallBottomPoint = (SCREEN_HEIGHT/2) + (projectedWallHeight/2);
+        wallInfo _wallInfo = {
+            projectedWallHeight,
+            wallTopPoint,
+            wallBottomPoint
+        };
+        renderTiles(_API, tileArray, _rayInfo, _wallInfo, x);
+    }
+}
+
+void pixelManipulator(API* _API, player _player) {
+    memset(_API->pixels, 0, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(Uint32));
+    Uint32* tileArray = readFromSprite(); 
+    renderGround(_API, _player, tileArray);
+    rayCaster(_API, _player, tileArray);
+    
+    SDL_UpdateTexture(_API->texture, NULL, _API->pixels, SCREEN_WIDTH * sizeof(Uint32));
+    SDL_RenderClear(_API->renderer);
+    SDL_RenderCopy(_API->renderer, _API->texture, NULL, NULL);
+    SDL_RenderPresent(_API->renderer);
+    free(tileArray);
+}
